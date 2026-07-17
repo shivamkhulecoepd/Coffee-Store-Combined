@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Bean & Brew PostgreSQL",
+      "Group": "Bean & Brew",
+      "Host": "beanbrew-postgres",
+      "Port": 5432,
+      "MaintenanceDB": "beanbrew",
+      "Username": "beanbrew",
+      "SSLMode": "prefer"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+# Dependencies
+node_modules
+.npm
+
+# Build outputs
+dist
+build
+
+# Prisma
+# prisma/migrations  # Keep for production deployments
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage
+.nyc_output
+
+# Docker
+docker-compose.override.yml
+
+# Git
+.git
+.gitignore
+
+# Documentation (keep DOCKER.md)
+*.md
+!DOCKER.md
+
+# Uploads (keep directory but not files)
+uploads/*
+!uploads/.gitkeep
+
+# Temp
+tmp
+temp
+*.tmp

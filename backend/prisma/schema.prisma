@@ -1,0 +1,507 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  BARISTA
+  CUSTOMER
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+  DELIVERY
+}
+
+enum OrderPriority {
+  NORMAL
+  RUSH
+}
+
+enum TableStatus {
+  VACANT
+  OCCUPIED
+  RESERVED
+  MAINTENANCE
+}
+
+enum InventoryStatus {
+  IN_STOCK
+  LOW_STOCK
+  OUT_OF_STOCK
+}
+
+enum UnitType {
+  PIECE
+  GRAM
+  KILOGRAM
+  MILLILITER
+  LITER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum OtpType {
+  VERIFICATION
+  PASSWORD_RESET
+}
+
+enum AuditAction {
+  // Auth
+  USER_REGISTERED
+  USER_LOGIN
+  USER_LOGOUT
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  OTP_VERIFIED
+  PASSWORD_UPDATED
+  
+  // Orders
+  ORDER_CREATED
+  ORDER_PAID
+  ORDER_PREPARING_STARTED
+  ORDER_PREPARING_COMPLETED
+  ORDER_READY
+  ORDER_SERVED
+  ORDER_CANCELLED
+  ORDER_REASSIGNED
+  ORDER_UPDATED
+  
+  // Inventory
+  INVENTORY_RESTOCKED
+  INVENTORY_ADJUSTED
+  LOW_STOCK_ALERT
+  
+  // Tables
+  TABLE_SESSION_STARTED
+  TABLE_SESSION_ENDED
+  
+  // Shifts
+  SHIFT_CREATED
+  SHIFT_UPDATED
+  SHIFT_CANCELLED
+  CLOCK_IN
+  CLOCK_OUT
+  
+  // Admin
+  EMPLOYEE_CREATED
+  EMPLOYEE_UPDATED
+  EMPLOYEE_DEACTIVATED
+  
+  // Notifications
+  NOTIFICATION
+}
+
+// ============================================
+// CORE ENTITIES
+// ============================================
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(CUSTOMER)
+  isActive     Boolean   @default(true) @map("is_active")
+  branchId     String?   @map("branch_id") // Primary branch for staff
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  // Relations
+  profile          Profile?
+  orders           Order[]
+  sessions         Session[]
+  tableSessions    TableSession[] @relation("BaristaTableSessions")
+  inventoryLogs    InventoryLog[]
+  auditLogs        AuditLog[]
+  otpCodes         OtpCode[]
+  assignedOrders   Order[] @relation("AssignedBarista")
+  
+  // Staff can belong to multiple branches
+  staffBranches    UserBranch[]
+  
+  @@index([email])
+  @@index([branchId])
+  @@map("users")
+}
+
+// Junction table for staff branch assignments
+model UserBranch {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  branchId  String   @map("branch_id")
+  isPrimary Boolean  @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId])
+  @@map("user_branches")
+}
+
+model Profile {
+  id          String   @id @default(uuid())
+  userId      String   @unique @map("user_id")
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  phone       String?  @unique
+  avatarUrl   String?  @map("avatar_url")
+  preferences Json     @default("{}")
+  loyaltyPoints Int    @default(0) @map("loyalty_points")
+  tier        String   @default("BRONZE")
+  totalSpent  Decimal  @default(0) @map("total_spent") @db.Decimal(12, 2)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  refreshToken String   @map("refresh_token")
+  deviceInfo   Json?    @map("device_info")
+  userAgent    String?  @map("user_agent")
+  ipAddress    String?  @map("ip_address")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  revokedAt    DateTime? @map("revoked_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@map("sessions")
+}
+
+model Branch {
+  id          String    @id @default(uuid())
+  name        String
+  address     String
+  phone       String?
+  email       String?
+  isActive    Boolean   @default(true) @map("is_active")
+  openingTime String    @default("08:00") @map("opening_time")
+  closingTime String    @default("22:00") @map("closing_time")
+  timezone    String    @default("UTC") @map("timezone")
+  currency    String    @default("USD") @map("currency")
+  taxRate     Decimal   @default(0.08) @map("tax_rate") @db.Decimal(4, 3)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  products       Product[]
+  inventory      Inventory[]
+  orders         Order[]
+  tableSessions  TableSession[]
+  staff          UserBranch[]
+
+  @@map("branches")
+}
+
+// ============================================
+// MENU & PRODUCTS
+// ============================================
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String    @unique
+  description String?
+  imageUrl    String?   @map("image_url")
+  sortOrder   Int       @default(0) @map("sort_order")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id              String    @id @default(uuid())
+  branchId        String?   @map("branch_id")
+  categoryId      String    @map("category_id")
+  name            String
+  slug            String
+  description     String?
+  basePrice       Decimal   @map("base_price") @db.Decimal(10, 2)
+  imageUrl        String?   @map("image_url")
+  heroTag         String?   @map("hero_tag")
+  rating          Float     @default(0)
+  ratingCount     Int       @default(0) @map("rating_count")
+  preparationTime Int       @default(5) @map("preparation_time") // in minutes
+  attributes      Json      @default("{}") // tasting notes, origin, etc.
+  isActive        Boolean   @default(true) @map("is_active")
+  isFeatured      Boolean   @default(false) @map("is_featured")
+  isAvailable     Boolean   @default(true) @map("is_available")
+  calories        Int?      @map("calories")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  // Relations
+  branch        Branch?              @relation(fields: [branchId], references: [id])
+  category      Category             @relation(fields: [categoryId], references: [id])
+  customizations ProductCustomization[]
+  orderItems    OrderItem[]
+  images        ProductImage[]
+
+  @@unique([branchId, slug])
+  @@index([categoryId])
+  @@index([name])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String   @map("product_id")
+  url       String
+  alt       String?
+  sortOrder Int      @default(0) @map("sort_order")
+  isPrimary Boolean  @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_images")
+}
+
+model ProductCustomization {
+  id          String  @id @default(uuid())
+  productId   String  @map("product_id")
+  name        String
+  options     Json    // Array of { name, price, isDefault }
+  isRequired  Boolean @default(false) @map("is_required")
+  maxSelect   Int     @default(1) @map("max_select")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_customizations")
+}
+
+// ============================================
+// ORDERS
+// ============================================
+
+model Order {
+  id                   String        @id @default(uuid())
+  orderNumber          String        @unique @map("order_number")
+  userId               String        @map("user_id")
+  branchId             String        @map("branch_id")
+  type                 OrderType     @default(DINE_IN) @map("order_type")
+  status               OrderStatus   @default(PENDING)
+  priority             OrderPriority @default(NORMAL)
+  subtotal             Decimal       @db.Decimal(10, 2)
+  taxAmount            Decimal       @db.Decimal(10, 2) @map("tax_amount")
+  discountAmount       Decimal       @default(0) @map("discount_amount")
+  totalAmount          Decimal       @map("total_amount") @db.Decimal(10, 2)
+  paymentMethod        String?       @map("payment_method")
+  paymentRef           String?       @map("payment_ref")
+  paymentStatus        PaymentStatus @default(PENDING) @map("payment_status")
+  notes                String?
+  assignedBaristaId    String?       @map("assigned_barista_id")
+  preparationStartedAt DateTime?     @map("preparation_started_at")
+  preparationCompletedAt DateTime?   @map("preparation_completed_at")
+  paidAt               DateTime?     @map("paid_at")
+  completedAt          DateTime?     @map("completed_at")
+  cancelledAt          DateTime?     @map("cancelled_at")
+  cancellationReason   String?       @map("cancellation_reason")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+  deletedAt            DateTime?     @map("deleted_at")
+
+  // Relations
+  user           User            @relation(fields: [userId], references: [id])
+  branch         Branch           @relation(fields: [branchId], references: [id])
+  assignedBarista User?           @relation("AssignedBarista", fields: [assignedBaristaId], references: [id])
+  items          OrderItem[]
+  tableSession   TableSession?   @relation(fields: [tableSessionId], references: [id])
+  tableSessionId String?          @map("table_session_id")
+
+  @@index([userId])
+  @@index([branchId])
+  @@index([status])
+  @@index([assignedBaristaId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id            String  @id @default(uuid())
+  orderId       String  @map("order_id")
+  productId     String  @map("product_id")
+  productName   String  @map("product_name")
+  quantity      Int
+  unitPrice     Decimal @map("unit_price") @db.Decimal(10, 2)
+  customizations Json   @default("[]") // { name, option, price }
+  subtotal      Decimal @db.Decimal(10, 2)
+  notes         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+// ============================================
+// TABLE SESSIONS
+// ============================================
+
+model TableSession {
+  id              String      @id @default(uuid())
+  branchId        String      @map("branch_id")
+  tableNumber     Int         @map("table_number")
+  status          TableStatus @default(VACANT)
+  baristaId       String?     @map("barista_id")
+  currentOrderId  String?     @map("current_order_id")
+  customerCount   Int         @default(1) @map("customer_count")
+  startTime       DateTime?   @map("start_time")
+  endTime         DateTime?   @map("end_time")
+  notes           String?
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  branch     Branch     @relation(fields: [branchId], references: [id])
+  barista    User?      @relation("BaristaTableSessions", fields: [baristaId], references: [id])
+  orders     Order[]
+
+  @@unique([branchId, tableNumber])
+  @@index([branchId])
+  @@map("table_sessions")
+}
+
+// ============================================
+// INVENTORY
+// ============================================
+
+model Inventory {
+  id            String          @id @default(uuid())
+  branchId      String          @map("branch_id")
+  itemName      String          @map("item_name")
+  sku           String?         @unique
+  quantity      Decimal         @db.Decimal(10, 2)
+  unit          UnitType        @default(PIECE)
+  threshold     Decimal         @default(10) @db.Decimal(10, 2) @map("threshold")
+  status        InventoryStatus @default(IN_STOCK)
+  lastRestocked DateTime?       @map("last_restocked")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  branch Branch         @relation(fields: [branchId], references: [id])
+  logs   InventoryLog[]
+
+  @@index([branchId])
+  @@map("inventory")
+}
+
+model InventoryLog {
+  id            String    @id @default(uuid())
+  inventoryId   String    @map("inventory_id")
+  userId        String    @map("user_id")
+  action        String    // INCREMENT, DECREMENT, ADJUSTMENT, RESTOCK
+  quantity      Decimal   @db.Decimal(10, 2)
+  previousQty   Decimal   @db.Decimal(10, 2) @map("previous_qty")
+  newQty        Decimal   @db.Decimal(10, 2) @map("new_qty")
+  reason        String?
+  reference     String?   // Order ID, etc.
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  inventory Inventory @relation(fields: [inventoryId], references: [id])
+  user     User      @relation(fields: [userId], references: [id])
+
+  @@index([inventoryId])
+  @@map("inventory_logs")
+}
+
+// ============================================
+// AUDIT & LOGGING
+// ============================================
+
+model AuditLog {
+  id          String     @id @default(uuid())
+  userId      String?    @map("user_id")
+  action      AuditAction @map("action")
+  entityType  String     @map("entity_type")
+  entityId    String     @map("entity_id")
+  changes     Json?
+  metadata    Json?
+  ipAddress   String?    @map("ip_address")
+  userAgent   String?    @map("user_agent")
+  branchId    String?    @map("branch_id")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([branchId])
+  @@map("audit_logs")
+}
+
+// ============================================
+// OTP & RECOVERY
+// ============================================
+
+model OtpCode {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  email     String
+  code      String
+  type      OtpType   @map("otp_type")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  attempts  Int       @default(0) @map("attempts")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([code, email])
+  @@map("otp_codes")
+}
